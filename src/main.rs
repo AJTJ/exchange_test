@@ -1,10 +1,10 @@
+use bigdecimal::BigDecimal;
 use csv::Reader;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fs::File;
 
-// Enum for transaction types
 #[derive(Debug)]
 enum TxType {
     Deposit,
@@ -27,7 +27,11 @@ impl TxType {
     }
 }
 
-// Struct to represent a transaction record
+fn has_valid_precision(amount: &BigDecimal) -> bool {
+    // Get the scale of the BigDecimal (number of digits after the decimal point)
+    amount.scale() <= 4
+}
+
 #[derive(Debug, Deserialize, Clone)]
 struct Record {
     #[serde(rename = "type")]
@@ -55,7 +59,6 @@ impl Account {
         }
     }
 
-    // Helper to handle deposit and withdrawal
     fn deposit(&mut self, amount: f32) {
         self.available += amount;
         self.total += amount;
@@ -98,7 +101,6 @@ impl Account {
     }
 }
 
-// Main function to process transactions
 fn main() -> Result<(), Box<dyn Error>> {
     let file = File::open("transactions.csv")?;
     let mut rdr = Reader::from_reader(file);
@@ -145,6 +147,8 @@ fn process_transaction(
         return Err("Account is locked".into());
     }
 
+    eprintln!("Processing transaction: {:?}", record);
+
     match tx_type {
         TxType::Deposit => process_deposit(record, account, transactions),
         TxType::Withdrawal => process_withdrawal(record, account, transactions),
@@ -159,6 +163,10 @@ fn process_deposit(
     account: &mut Account,
     transactions: &mut HashMap<u32, Record>,
 ) -> Result<(), Box<dyn Error>> {
+    if transactions.contains_key(&record.tx) {
+        return Err("Transaction number already exists".into());
+    }
+
     if let Some(amount) = record.amount {
         account.deposit(amount);
         transactions.insert(record.tx, record);
@@ -173,6 +181,10 @@ fn process_withdrawal(
     account: &mut Account,
     transactions: &mut HashMap<u32, Record>,
 ) -> Result<(), Box<dyn Error>> {
+    if transactions.contains_key(&record.tx) {
+        return Err("Transaction number already exists".into());
+    }
+
     if let Some(amount) = record.amount {
         account.withdraw(amount)?;
         transactions.insert(record.tx, record);
@@ -191,6 +203,11 @@ fn process_dispute(
     let disputed_tx = transactions
         .get(&record.tx)
         .ok_or("Disputed transaction not found")?;
+
+    if disputed_tx.tx_type.to_lowercase() != "deposit" {
+        return Err("Only deposit transactions can be disputed".into());
+    }
+
     if disputes.contains(&record.tx) {
         return Err("Transaction is already in dispute".into());
     }
@@ -213,6 +230,7 @@ fn process_resolve(
     let disputed_tx = transactions
         .get(&record.tx)
         .ok_or("Resolved transaction not found")?;
+
     if !disputes.contains(&record.tx) {
         return Err("Transaction is not currently in dispute".into());
     }
