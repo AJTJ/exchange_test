@@ -1,5 +1,6 @@
-use bigdecimal::BigDecimal;
 use csv::Reader;
+use rust_decimal::prelude::*;
+use rust_decimal::Decimal;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
@@ -27,44 +28,40 @@ impl TxType {
     }
 }
 
-fn has_valid_precision(amount: &BigDecimal) -> bool {
-    // Get the scale of the BigDecimal (number of digits after the decimal point)
-    amount.scale() <= 4
-}
-
 #[derive(Debug, Deserialize, Clone)]
 struct Record {
     #[serde(rename = "type")]
     tx_type: String,
     client: u16,
     tx: u32,
-    amount: Option<f32>,
+    #[serde(deserialize_with = "csv::invalid_option")]
+    amount: Option<Decimal>,
 }
 
 #[derive(Debug)]
 struct Account {
-    available: f32,
-    held: f32,
-    total: f32,
+    available: Decimal,
+    held: Decimal,
+    total: Decimal,
     locked: bool,
 }
 
 impl Account {
     fn new() -> Account {
         Account {
-            available: 0.0,
-            held: 0.0,
-            total: 0.0,
+            available: Decimal::new(0, 0),
+            held: Decimal::new(0, 0),
+            total: Decimal::new(0, 0),
             locked: false,
         }
     }
 
-    fn deposit(&mut self, amount: f32) {
+    fn deposit(&mut self, amount: Decimal) {
         self.available += amount;
         self.total += amount;
     }
 
-    fn withdraw(&mut self, amount: f32) -> Result<(), &'static str> {
+    fn withdraw(&mut self, amount: Decimal) -> Result<(), &'static str> {
         if self.available >= amount {
             self.available -= amount;
             self.total -= amount;
@@ -74,7 +71,7 @@ impl Account {
         }
     }
 
-    fn apply_dispute(&mut self, amount: f32) -> Result<(), &'static str> {
+    fn apply_dispute(&mut self, amount: Decimal) -> Result<(), &'static str> {
         if self.available >= amount {
             self.available -= amount;
             self.held += amount;
@@ -84,7 +81,7 @@ impl Account {
         }
     }
 
-    fn resolve_dispute(&mut self, amount: f32) -> Result<(), &'static str> {
+    fn resolve_dispute(&mut self, amount: Decimal) -> Result<(), &'static str> {
         if self.held >= amount {
             self.held -= amount;
             self.available += amount;
@@ -94,7 +91,7 @@ impl Account {
         }
     }
 
-    fn chargeback(&mut self, amount: f32) {
+    fn chargeback(&mut self, amount: Decimal) {
         self.total -= amount;
         self.held -= amount;
         self.locked = true;
@@ -109,6 +106,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut transactions: HashMap<u32, Record> = HashMap::new();
     let mut disputes: HashSet<u32> = HashSet::new();
 
+    // Stream the CSV file to avoid loading the entire file into memory
+    // This allows us to handle large files or even infinite streams
     for result in rdr.deserialize() {
         let record: Record = result?;
         if let Err(e) = process_transaction(record, &mut accounts, &mut transactions, &mut disputes)
@@ -121,7 +120,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-// Helper function to handle transaction processing
 fn process_transaction(
     record: Record,
     accounts: &mut HashMap<u16, Account>,
@@ -130,13 +128,20 @@ fn process_transaction(
 ) -> Result<(), Box<dyn Error>> {
     let tx_type = TxType::from_str(&record.tx_type)?;
 
-    // If the account does not exist, create it if the transaction is a deposit
+    // Check if the account exists
     if !accounts.contains_key(&record.client) {
         match tx_type {
             TxType::Deposit => {
+                // Create a new account only if it's a deposit
                 accounts.insert(record.client, Account::new());
             }
-            _ => return Err("Cannot process transaction for non-existent account".into()),
+            _ => {
+                return Err(format!(
+                    "Account {} does not exist for transaction type {:?}",
+                    record.client, tx_type
+                )
+                .into())
+            }
         }
     }
 
@@ -146,8 +151,6 @@ fn process_transaction(
     if account.locked {
         return Err("Account is locked".into());
     }
-
-    eprintln!("Processing transaction: {:?}", record);
 
     match tx_type {
         TxType::Deposit => process_deposit(record, account, transactions),
@@ -163,11 +166,19 @@ fn process_deposit(
     account: &mut Account,
     transactions: &mut HashMap<u32, Record>,
 ) -> Result<(), Box<dyn Error>> {
+    if account.locked {
+        return Err("Cannot process transaction on a locked account".into());
+    }
+
     if transactions.contains_key(&record.tx) {
         return Err("Transaction number already exists".into());
     }
 
     if let Some(amount) = record.amount {
+        if !has_valid_precision(&amount) {
+            return Err("Deposit transaction amount exceeds allowed precision".into());
+        }
+
         account.deposit(amount);
         transactions.insert(record.tx, record);
         Ok(())
@@ -181,11 +192,19 @@ fn process_withdrawal(
     account: &mut Account,
     transactions: &mut HashMap<u32, Record>,
 ) -> Result<(), Box<dyn Error>> {
+    if account.locked {
+        return Err("Cannot process transaction on a locked account".into());
+    }
+
     if transactions.contains_key(&record.tx) {
         return Err("Transaction number already exists".into());
     }
 
     if let Some(amount) = record.amount {
+        if !has_valid_precision(&amount) {
+            return Err("Withdrawal transaction amount exceeds allowed precision".into());
+        }
+
         account.withdraw(amount)?;
         transactions.insert(record.tx, record);
         Ok(())
@@ -200,6 +219,10 @@ fn process_dispute(
     transactions: &HashMap<u32, Record>,
     disputes: &mut HashSet<u32>,
 ) -> Result<(), Box<dyn Error>> {
+    if account.locked {
+        return Err("Cannot process transaction on a locked account".into());
+    }
+
     let disputed_tx = transactions
         .get(&record.tx)
         .ok_or("Disputed transaction not found")?;
@@ -227,6 +250,10 @@ fn process_resolve(
     transactions: &HashMap<u32, Record>,
     disputes: &mut HashSet<u32>,
 ) -> Result<(), Box<dyn Error>> {
+    if account.locked {
+        return Err("Cannot process transaction on a locked account".into());
+    }
+
     let disputed_tx = transactions
         .get(&record.tx)
         .ok_or("Resolved transaction not found")?;
@@ -250,6 +277,10 @@ fn process_chargeback(
     transactions: &HashMap<u32, Record>,
     disputes: &mut HashSet<u32>,
 ) -> Result<(), Box<dyn Error>> {
+    if account.locked {
+        return Err("Cannot process transaction on a locked account".into());
+    }
+
     let disputed_tx = transactions
         .get(&record.tx)
         .ok_or("Chargeback transaction not found")?;
@@ -282,4 +313,8 @@ fn write_accounts_to_csv(accounts: &HashMap<u16, Account>) -> Result<(), Box<dyn
 
     wtr.flush()?;
     Ok(())
+}
+
+fn has_valid_precision(amount: &Decimal) -> bool {
+    amount.scale() <= 4 // Scale gives the number of decimal places
 }
