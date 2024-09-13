@@ -334,17 +334,6 @@ fn process_resolve(
     if let Some(amount) = disputed_tx.amount {
         account.resolve_dispute(amount)?;
         disputes.remove(&record.tx);
-        if disputes.contains(&record.tx) {
-            eprintln!(
-                "Debug: Dispute on transaction {} was not removed.",
-                record.tx
-            );
-        } else {
-            eprintln!(
-                "Debug: Dispute on transaction {} successfully removed.",
-                record.tx
-            );
-        }
         Ok(())
     } else {
         Err(format!("Resolve error: Transaction {} has no amount", record.tx).into())
