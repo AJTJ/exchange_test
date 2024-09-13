@@ -4,9 +4,9 @@
 
 - The separation of concerns between account manipulation and transaction validation/management was a design choice. In my mind it is idiomatic to rustic systems to maintain a more functional structure. And I find that modularity helps with maintainability and feature enhancements.
 
-- For error handling, the code handles various types of errors gracefully, for now I have for the most part, decided to simply log errors to `eprintln!`. In production I would include more robust error handling and mechanisms such as retry logic, and different levels of error handling.
+- For error handling, the code handles various types of errors gracefully, for now I have for the most part, decided to simply log errors to `eprintln!`. In production I would definitely want custom error types, and I'd include more robust error handling and mechanisms such as retry logic, and different levels of error handling.
 
-- I've attempted to leave some comments in my code, which is usually a preferred form of documentation.
+- I've attempted to leave some comments in my code, which is usually a preferred form of documentation. In production, I would want to integrate with cargo docs.
 
 - Currently I'm storing accounts, transactions, and disputes in memory. This is efficient for a demo, but obviously wouldn't do at scale. You would be using a persistent database solution, and perhaps you would explore partitioning by `client_id` in order to scale efficiently.
 
