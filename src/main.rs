@@ -1,12 +1,16 @@
 use csv::ReaderBuilder;
 use rust_decimal::Decimal;
 use serde::Deserialize;
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::error::Error;
 use std::fs::File;
 use std::io;
 use std::str::FromStr;
+
+type ClientId = u16;
+type TransactionId = u32;
 
 // Represents the different types of transactions
 #[derive(Debug)]
@@ -38,8 +42,8 @@ impl FromStr for TxType {
 struct Record {
     #[serde(rename = "type")]
     tx_type: String,
-    client: u16,
-    tx: u32,
+    client: ClientId,
+    tx: TransactionId,
     #[serde(deserialize_with = "csv::invalid_option")]
     amount: Option<Decimal>,
 }
@@ -140,9 +144,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut rdr = ReaderBuilder::new().comment(Some(b'#')).from_reader(file);
 
     // For the purpose of this project we'll use a HashMap to store accounts and transactions
-    let mut accounts: HashMap<u16, Account> = HashMap::new();
-    let mut transactions: HashMap<u32, Record> = HashMap::new();
-    let mut disputes: HashSet<u32> = HashSet::new();
+    let mut accounts: HashMap<ClientId, Account> = HashMap::new();
+    let mut transactions: HashMap<TransactionId, Record> = HashMap::new();
+    let mut disputes: HashSet<TransactionId> = HashSet::new();
 
     // Stream each record one at a time to avoid loading the entire file into memory
     for result in rdr.deserialize() {
@@ -163,27 +167,24 @@ fn main() -> Result<(), Box<dyn Error>> {
 // Processes a transaction record by updating accounts and tracking transactions.
 fn process_transaction(
     record: &Record,
-    accounts: &mut HashMap<u16, Account>,
-    transactions: &mut HashMap<u32, Record>,
-    disputes: &mut HashSet<u32>,
+    accounts: &mut HashMap<ClientId, Account>,
+    transactions: &mut HashMap<TransactionId, Record>,
+    disputes: &mut HashSet<TransactionId>,
 ) -> Result<(), Box<dyn Error>> {
     let tx_type = TxType::from_str(&record.tx_type)?;
 
     match tx_type {
-        // Access or create an account for deposits
-        TxType::Deposit => {
-            let mut account = accounts
-                .get(&record.client)
-                .cloned()
-                .unwrap_or_else(Account::new);
-
-            process_deposit(&record, &mut account, transactions)?;
-
-            // Add OR Update the account if the deposit was successful
-            accounts.insert(record.client, account.clone());
-
-            Ok(())
-        }
+        TxType::Deposit => match accounts.entry(record.client) {
+            // If the account already exists, process the deposit
+            Entry::Occupied(mut entry) => process_deposit(record, entry.get_mut(), transactions),
+            // If the account does not exist, create a new account and process the deposit, inserting the account AFTER the deposit
+            Entry::Vacant(entry) => {
+                let mut account = Account::new();
+                process_deposit(&record, &mut account, transactions)?;
+                entry.insert(account);
+                Ok(())
+            }
+        },
 
         // All other transaction types require an existing account
         TxType::Withdrawal | TxType::Dispute | TxType::Resolve | TxType::Chargeback => {
@@ -211,7 +212,7 @@ fn process_transaction(
 fn process_deposit(
     record: &Record,
     account: &mut Account,
-    transactions: &mut HashMap<u32, Record>,
+    transactions: &mut HashMap<TransactionId, Record>,
 ) -> Result<(), Box<dyn Error>> {
     if transactions.contains_key(&record.tx) {
         return Err(format!("Duplicate transaction ID: {}; ignoring", record.tx).into());
@@ -246,7 +247,7 @@ fn process_deposit(
 fn process_withdrawal(
     record: &Record,
     account: &mut Account,
-    transactions: &mut HashMap<u32, Record>,
+    transactions: &mut HashMap<TransactionId, Record>,
 ) -> Result<(), Box<dyn Error>> {
     if transactions.contains_key(&record.tx) {
         return Err(format!("Duplicate transation ID: {}; ignoring", record.tx).into());
@@ -282,8 +283,8 @@ fn process_withdrawal(
 fn process_dispute(
     record: &Record,
     account: &mut Account,
-    transactions: &HashMap<u32, Record>,
-    disputes: &mut HashSet<u32>,
+    transactions: &HashMap<TransactionId, Record>,
+    disputes: &mut HashSet<TransactionId>,
 ) -> Result<(), Box<dyn Error>> {
     let disputed_tx = match transactions.get(&record.tx) {
         Some(tx) => tx,
@@ -315,8 +316,8 @@ fn process_dispute(
 fn process_resolve(
     record: &Record,
     account: &mut Account,
-    transactions: &HashMap<u32, Record>,
-    disputes: &mut HashSet<u32>,
+    transactions: &HashMap<TransactionId, Record>,
+    disputes: &mut HashSet<TransactionId>,
 ) -> Result<(), Box<dyn Error>> {
     if !disputes.contains(&record.tx) {
         return Err(format!("Resolve error: Transaction {} is not disputed", record.tx).into());
@@ -340,8 +341,8 @@ fn process_resolve(
 fn process_chargeback(
     record: &Record,
     account: &mut Account,
-    transactions: &HashMap<u32, Record>,
-    disputes: &mut HashSet<u32>,
+    transactions: &HashMap<TransactionId, Record>,
+    disputes: &mut HashSet<TransactionId>,
 ) -> Result<(), Box<dyn Error>> {
     if !disputes.contains(&record.tx) {
         return Err(format!(
@@ -368,7 +369,7 @@ fn process_chargeback(
 }
 
 // Outputs client ID, available funds, held funds, total funds, and locked status.
-fn write_accounts_to_csv(accounts: &HashMap<u16, Account>) -> Result<(), Box<dyn Error>> {
+fn write_accounts_to_csv(accounts: &HashMap<ClientId, Account>) -> Result<(), Box<dyn Error>> {
     let mut wtr = csv::Writer::from_writer(io::stdout());
     wtr.write_record(&["client", "available", "held", "total", "locked"])?;
 
@@ -408,9 +409,9 @@ mod tests {
         let file = File::open(&csv_path).expect("Failed to open test data CSV file");
         let mut rdr = ReaderBuilder::new().comment(Some(b'#')).from_reader(file);
 
-        let mut accounts: HashMap<u16, Account> = HashMap::new();
-        let mut transactions: HashMap<u32, Record> = HashMap::new();
-        let mut disputes: HashSet<u32> = HashSet::new();
+        let mut accounts: HashMap<ClientId, Account> = HashMap::new();
+        let mut transactions: HashMap<TransactionId, Record> = HashMap::new();
+        let mut disputes: HashSet<TransactionId> = HashSet::new();
 
         // Keep track of error count
         let mut error_count = 0;
