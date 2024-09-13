@@ -32,7 +32,7 @@ impl FromStr for TxType {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct Record {
     #[serde(rename = "type")]
     tx_type: String,
@@ -42,7 +42,7 @@ struct Record {
     amount: Option<Decimal>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Account {
     available: Decimal,
     held: Decimal,
@@ -60,45 +60,66 @@ impl Account {
         }
     }
 
-    fn deposit(&mut self, amount: Decimal) {
+    fn deposit(&mut self, amount: Decimal) -> Result<(), &'static str> {
+        if self.locked {
+            return Err("Deposit error: Account is locked");
+        }
         self.available += amount;
         self.total += amount;
+        Ok(())
     }
 
     fn withdraw(&mut self, amount: Decimal) -> Result<(), &'static str> {
+        if self.locked {
+            return Err("Withdrawal error: Account is locked");
+        }
         if self.available >= amount {
             self.available -= amount;
             self.total -= amount;
             Ok(())
         } else {
-            Err("Insufficient funds for withdrawal")
+            Err("Withdrawal error: Insufficient funds for withdrawal")
         }
     }
 
     fn apply_dispute(&mut self, amount: Decimal) -> Result<(), &'static str> {
+        if self.locked {
+            return Err("Dispute error: Account is locked");
+        }
         if self.available >= amount {
             self.available -= amount;
             self.held += amount;
             Ok(())
         } else {
-            Err("Insufficient available funds for dispute")
+            Err("Dispute error: Insufficient available funds for dispute")
         }
     }
 
     fn resolve_dispute(&mut self, amount: Decimal) -> Result<(), &'static str> {
+        if self.locked {
+            return Err("Resolve error: Account is locked");
+        }
         if self.held >= amount {
             self.held -= amount;
             self.available += amount;
             Ok(())
         } else {
-            Err("Insufficient held funds for resolve")
+            Err("Resolve error: Insufficient held funds for resolve")
         }
     }
 
-    fn chargeback(&mut self, amount: Decimal) {
-        self.total -= amount;
-        self.held -= amount;
-        self.locked = true;
+    fn chargeback(&mut self, amount: Decimal) -> Result<(), &'static str> {
+        if self.locked {
+            return Err("Chargeback error: Account is locked");
+        }
+        if self.held >= amount {
+            self.total -= amount;
+            self.held -= amount;
+            self.locked = true;
+            Ok(())
+        } else {
+            Err("Chargeback error: Insufficient held funds for chargeback")
+        }
     }
 }
 
@@ -121,7 +142,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Stream the CSV file to avoid loading the entire file into memory
     for result in rdr.deserialize() {
         let record: Record = result?;
-        if let Err(e) = process_transaction(record, &mut accounts, &mut transactions, &mut disputes)
+        if let Err(e) =
+            process_transaction(&record, &mut accounts, &mut transactions, &mut disputes)
         {
             // In the specification we are told to ignore invalid disputes, resolves, and chargebacks
             // so we'll just print an error message and continue processing the rest of the transactions
@@ -135,57 +157,76 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn process_transaction(
-    record: Record,
+    record: &Record,
     accounts: &mut HashMap<u16, Account>,
     transactions: &mut HashMap<u32, Record>,
     disputes: &mut HashSet<u32>,
 ) -> Result<(), Box<dyn Error>> {
     let tx_type = TxType::from_str(&record.tx_type)?;
 
-    // Check if the account exists; create if it's a deposit
-    if !accounts.contains_key(&record.client) && matches!(tx_type, TxType::Deposit) {
-        accounts.insert(record.client, Account::new());
-    }
-
-    // If account doesn't exist after potential creation, return error
-    let account = match accounts.get_mut(&record.client) {
-        Some(acc) => acc,
-        None => {
-            return Err(format!(
-                "Account {} does not exist for transaction type {:?}",
-                record.client, tx_type
-            )
-            .into())
-        }
-    };
-
-    if account.locked {
-        return Err("Account is locked".into());
-    }
-
     match tx_type {
-        TxType::Deposit => process_deposit(record, account, transactions),
-        TxType::Withdrawal => process_withdrawal(record, account, transactions),
-        TxType::Dispute => process_dispute(record, account, transactions, disputes),
-        TxType::Resolve => process_resolve(record, account, transactions, disputes),
-        TxType::Chargeback => process_chargeback(record, account, transactions, disputes),
+        TxType::Deposit => {
+            let mut account = accounts
+                .get(&record.client)
+                .cloned()
+                .unwrap_or_else(Account::new);
+
+            process_deposit(&record, &mut account, transactions)?;
+
+            // Add OR Update the account if the deposit was successful
+            accounts.insert(record.client, account.clone());
+
+            Ok(())
+        }
+        TxType::Withdrawal => {
+            if let Some(account) = accounts.get_mut(&record.client) {
+                process_withdrawal(&record, account, transactions)
+            } else {
+                Err(format!(
+                    "Account {} does not exist for transaction type {:?}",
+                    record.client, tx_type
+                )
+                .into())
+            }
+        }
+        TxType::Dispute | TxType::Resolve | TxType::Chargeback => {
+            if let Some(account) = accounts.get_mut(&record.client) {
+                match tx_type {
+                    TxType::Dispute => process_dispute(&record, account, transactions, disputes),
+                    TxType::Resolve => process_resolve(&record, account, transactions, disputes),
+                    TxType::Chargeback => {
+                        process_chargeback(&record, account, transactions, disputes)
+                    }
+                    _ => unreachable!(),
+                }
+            } else {
+                Err(format!(
+                    "Account {} does not exist for transaction type {:?}",
+                    record.client, tx_type
+                )
+                .into())
+            }
+        }
     }
 }
 
 fn process_deposit(
-    record: Record,
+    record: &Record,
     account: &mut Account,
     transactions: &mut HashMap<u32, Record>,
 ) -> Result<(), Box<dyn Error>> {
-    if account.locked {
-        return Err(format!("Account {} is locked; ignoring deposit", record.client).into());
-    }
-
     if transactions.contains_key(&record.tx) {
         return Err(format!("Duplicate transation ID: {}; ignoring", record.tx).into());
     }
 
     if let Some(amount) = record.amount {
+        if amount.is_sign_negative() {
+            return Err(format!(
+                "Deposit amount cannot be negative; transaction {}",
+                record.tx
+            )
+            .into());
+        }
         if !has_valid_precision(&amount) {
             return Err(format!(
                 "Deposit amount exceeds allowed precision; transaction {}",
@@ -194,8 +235,8 @@ fn process_deposit(
             .into());
         }
 
-        account.deposit(amount);
-        transactions.insert(record.tx, record);
+        account.deposit(amount)?;
+        transactions.insert(record.tx, record.clone());
         Ok(())
     } else {
         Err(format!("Deposit transaction {} missing amount", record.tx).into())
@@ -203,19 +244,23 @@ fn process_deposit(
 }
 
 fn process_withdrawal(
-    record: Record,
+    record: &Record,
     account: &mut Account,
     transactions: &mut HashMap<u32, Record>,
 ) -> Result<(), Box<dyn Error>> {
-    if account.locked {
-        return Err(format!("Account {} is locked; ignoring withdrawal", record.client).into());
-    }
-
     if transactions.contains_key(&record.tx) {
         return Err(format!("Duplicate transation ID: {}; ignoring", record.tx).into());
     }
 
     if let Some(amount) = record.amount {
+        if amount.is_sign_negative() {
+            return Err(format!(
+                "Withdrawal amount cannot be negative; transaction {}",
+                record.tx
+            )
+            .into());
+        }
+
         if !has_valid_precision(&amount) {
             return Err(format!(
                 "Withdrawal amount exceeds allowed precision; transaction {}",
@@ -225,7 +270,7 @@ fn process_withdrawal(
         }
 
         account.withdraw(amount)?;
-        transactions.insert(record.tx, record);
+        transactions.insert(record.tx, record.clone());
         Ok(())
     } else {
         Err(format!("Withdrawal transaction {} missing amount", record.tx).into())
@@ -233,15 +278,11 @@ fn process_withdrawal(
 }
 
 fn process_dispute(
-    record: Record,
+    record: &Record,
     account: &mut Account,
     transactions: &HashMap<u32, Record>,
     disputes: &mut HashSet<u32>,
 ) -> Result<(), Box<dyn Error>> {
-    if account.locked {
-        return Err(format!("Account {} is locked; ignoring dispute", record.client).into());
-    }
-
     let disputed_tx = match transactions.get(&record.tx) {
         Some(tx) => tx,
         None => return Err(format!("Dispute error: Transaction {} not found", record.tx).into()),
@@ -269,15 +310,11 @@ fn process_dispute(
 }
 
 fn process_resolve(
-    record: Record,
+    record: &Record,
     account: &mut Account,
     transactions: &HashMap<u32, Record>,
     disputes: &mut HashSet<u32>,
 ) -> Result<(), Box<dyn Error>> {
-    if account.locked {
-        return Err(format!("Account {} is locked; ignoring resolve", record.client).into());
-    }
-
     if !disputes.contains(&record.tx) {
         return Err(format!("Resolve error: Transaction {} is not disputed", record.tx).into());
     }
@@ -290,6 +327,17 @@ fn process_resolve(
     if let Some(amount) = disputed_tx.amount {
         account.resolve_dispute(amount)?;
         disputes.remove(&record.tx);
+        if disputes.contains(&record.tx) {
+            eprintln!(
+                "Debug: Dispute on transaction {} was not removed.",
+                record.tx
+            );
+        } else {
+            eprintln!(
+                "Debug: Dispute on transaction {} successfully removed.",
+                record.tx
+            );
+        }
         Ok(())
     } else {
         Err(format!("Resolve error: Transaction {} has no amount", record.tx).into())
@@ -297,15 +345,11 @@ fn process_resolve(
 }
 
 fn process_chargeback(
-    record: Record,
+    record: &Record,
     account: &mut Account,
     transactions: &HashMap<u32, Record>,
     disputes: &mut HashSet<u32>,
 ) -> Result<(), Box<dyn Error>> {
-    if account.locked {
-        return Err(format!("Account {} is locked; ignoring chargeback", record.client).into());
-    }
-
     if !disputes.contains(&record.tx) {
         return Err(format!(
             "Chargeback error: Transaction {} is not disputed",
@@ -322,7 +366,7 @@ fn process_chargeback(
     };
 
     if let Some(amount) = disputed_tx.amount {
-        account.chargeback(amount);
+        account.chargeback(amount)?;
         disputes.remove(&record.tx);
         Ok(())
     } else {
@@ -355,63 +399,104 @@ fn has_valid_precision(amount: &Decimal) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
 
     #[test]
-    fn test_deposit() {
-        let mut account = Account::new();
-        account.deposit(Decimal::new(1000, 2)); // $10.00
-        assert_eq!(account.available, Decimal::new(1000, 2));
-        assert_eq!(account.total, Decimal::new(1000, 2));
-    }
+    fn test_large_csv_with_edge_cases() {
+        let csv_data = "\
+type,client,tx,amount
+# Valid Deposits
+deposit,1,1,1000.0000
+deposit,2,2,2000.1234
+deposit,1,3,500.0000
+# Invalid Deposit (exceeds precision)
+deposit,3,4,100.12345
+# Valid Withdrawal
+withdrawal,1,5,300.0000
+# Withdrawal with Insufficient Funds
+withdrawal,2,6,3000.0000
+# Duplicate Transaction ID
+deposit,1,1,1000.0000
+# Dispute on Valid Deposit
+dispute,1,3,
+# Dispute on Non-existent Transaction
+dispute,1,99,
+# Dispute on Withdrawal
+dispute,1,5,
+# Resolve Valid Dispute
+resolve,1,3,
+# Chargeback on Resolved Dispute
+chargeback,1,3,
+# Chargeback on Valid Dispute
+dispute,2,2,
+chargeback,2,2,
+# Attempt Transaction on Locked Account
+deposit,2,7,500.0000
+# Invalid Transaction Type
+invalid_type,1,8,100.0000
+# Missing Amount in Deposit
+deposit,4,9,
+# Missing Amount in Withdrawal
+withdrawal,4,10,
+# Negative Amount in Deposit
+deposit,4,11,-100.0000
+# Negative Amount in Withdrawal
+withdrawal,1,12,-200.0000
+# Exceeding Precision in Withdrawal
+withdrawal,1,13,50.12345
+# Valid Deposit After Chargeback
+deposit,1,14,100.0000
+";
 
-    #[test]
-    fn test_withdrawal() {
-        let mut account = Account::new();
-        account.deposit(Decimal::new(1000, 2));
-        assert!(account.withdraw(Decimal::new(500, 2)).is_ok());
-        assert_eq!(account.available, Decimal::new(500, 2));
-        assert_eq!(account.total, Decimal::new(500, 2));
-    }
+        let file = Cursor::new(csv_data);
+        let mut rdr = ReaderBuilder::new().comment(Some(b'#')).from_reader(file);
 
-    #[test]
-    fn test_overdraft() {
-        let mut account = Account::new();
-        account.deposit(Decimal::new(1000, 2));
-        assert!(account.withdraw(Decimal::new(1500, 2)).is_err());
-        assert_eq!(account.available, Decimal::new(1000, 2));
-        assert_eq!(account.total, Decimal::new(1000, 2));
-    }
+        let mut accounts: HashMap<u16, Account> = HashMap::new();
+        let mut transactions: HashMap<u32, Record> = HashMap::new();
+        let mut disputes: HashSet<u32> = HashSet::new();
 
-    #[test]
-    fn test_dispute() {
-        let mut account = Account::new();
-        account.deposit(Decimal::new(1000, 2));
-        assert!(account.apply_dispute(Decimal::new(500, 2)).is_ok());
-        assert_eq!(account.available, Decimal::new(500, 2));
-        assert_eq!(account.held, Decimal::new(500, 2));
-        assert_eq!(account.total, Decimal::new(1000, 2));
-    }
+        // Collect error messages
+        let mut error_messages = Vec::new();
 
-    #[test]
-    fn test_resolve() {
-        let mut account = Account::new();
-        account.deposit(Decimal::new(1000, 2));
-        account.apply_dispute(Decimal::new(500, 2)).unwrap();
-        assert!(account.resolve_dispute(Decimal::new(500, 2)).is_ok());
-        assert_eq!(account.available, Decimal::new(1000, 2));
-        assert_eq!(account.held, Decimal::new(0, 2));
-        assert_eq!(account.total, Decimal::new(1000, 2));
-    }
+        for result in rdr.deserialize() {
+            let record: Record = match result {
+                Ok(rec) => rec,
+                Err(e) => {
+                    error_messages.push(format!("CSV deserialization error: {}", e));
+                    continue;
+                }
+            };
+            if let Err(e) =
+                process_transaction(&record, &mut accounts, &mut transactions, &mut disputes)
+            {
+                // Collect error messages instead of printing
+                error_messages.push(format!("Failed to process transaction: {}", e));
+            }
+        }
 
-    #[test]
-    fn test_chargeback() {
-        let mut account = Account::new();
-        account.deposit(Decimal::new(1000, 2));
-        account.apply_dispute(Decimal::new(500, 2)).unwrap();
-        account.chargeback(Decimal::new(500, 2));
-        assert_eq!(account.available, Decimal::new(500, 2));
-        assert_eq!(account.held, Decimal::new(0, 2));
-        assert_eq!(account.total, Decimal::new(500, 2));
-        assert!(account.locked);
+        // Verify error messages (optional)
+        assert_eq!(error_messages.len(), 13); // Expected number of errors
+
+        // Verify the final state of the accounts
+        let account1 = accounts.get(&1).unwrap();
+        assert_eq!(account1.available, Decimal::new(130000, 2)); // $1300.00
+        assert_eq!(account1.held, Decimal::new(0, 2)); // $0.00
+        assert_eq!(account1.total, Decimal::new(130000, 2)); // $1300.00
+        assert!(!account1.locked); // Account is not locked
+
+        let account2 = accounts.get(&2).unwrap();
+        assert_eq!(account2.available, Decimal::new(0, 4)); // $0.0000
+        assert_eq!(account2.held, Decimal::new(0, 4)); // $0.0000
+        assert_eq!(account2.total, Decimal::new(0, 4)); // $0.0000
+        assert!(account2.locked); // Account is locked after chargeback
+
+        // Ensure account 3 and account 4 do not exist due to invalid transactions
+        assert!(!accounts.contains_key(&3));
+        assert!(!accounts.contains_key(&4));
+
+        // Print the error messages (optional)
+        for msg in error_messages {
+            println!("{}", msg);
+        }
     }
 }
