@@ -8,6 +8,7 @@ use std::fs::File;
 use std::io;
 use std::str::FromStr;
 
+// Represents the different types of transactions
 #[derive(Debug)]
 enum TxType {
     Deposit,
@@ -32,6 +33,7 @@ impl FromStr for TxType {
     }
 }
 
+// Represents a transaction record parsed from the CSV input
 #[derive(Debug, Deserialize, Clone)]
 struct Record {
     #[serde(rename = "type")]
@@ -42,7 +44,7 @@ struct Record {
     amount: Option<Decimal>,
 }
 
-// Account struct to store and manipulate account information
+// Represents a client's account, storing/managing balances and status
 #[derive(Debug, Clone)]
 struct Account {
     available: Decimal,
@@ -124,6 +126,8 @@ impl Account {
     }
 }
 
+// Reads transactions from a CSV file provided as a command line argument
+// Outputs the final state of all accounts in CSV format to stdout
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
     if args.len() != 2 {
@@ -140,15 +144,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut transactions: HashMap<u32, Record> = HashMap::new();
     let mut disputes: HashSet<u32> = HashSet::new();
 
-    // Stream the CSV file to avoid loading the entire file into memory
+    // Stream each record one at a time to avoid loading the entire file into memory
     for result in rdr.deserialize() {
         let record: Record = result?;
         if let Err(e) =
             process_transaction(&record, &mut accounts, &mut transactions, &mut disputes)
         {
             // In the specification we are told to ignore invalid disputes, resolves, and chargebacks
-            // so I've decided to print an error message and continue processing the rest of the transactions
-            // For a project of larger scale we would use a logging library to log non-critical errors vs critical errors
+            // so I've decided to print an error message and continue processing
             eprintln!("Failed to process transaction: {}", e);
         }
     }
@@ -157,6 +160,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+// Processes a transaction record by updating accounts and tracking transactions.
 fn process_transaction(
     record: &Record,
     accounts: &mut HashMap<u16, Account>,
@@ -211,7 +215,6 @@ fn process_transaction(
     }
 }
 
-// Helper functions to process each transaction type
 fn process_deposit(
     record: &Record,
     account: &mut Account,
@@ -279,6 +282,7 @@ fn process_withdrawal(
     }
 }
 
+// Moves funds from available to held and records the dispute.
 fn process_dispute(
     record: &Record,
     account: &mut Account,
@@ -311,6 +315,7 @@ fn process_dispute(
     }
 }
 
+// Moves funds from held back to available and removes the dispute.
 fn process_resolve(
     record: &Record,
     account: &mut Account,
@@ -346,6 +351,7 @@ fn process_resolve(
     }
 }
 
+// Removes held funds (and thus total funds), removes dispute and locks the account.
 fn process_chargeback(
     record: &Record,
     account: &mut Account,
@@ -376,6 +382,7 @@ fn process_chargeback(
     }
 }
 
+// Outputs client ID, available funds, held funds, total funds, and locked status.
 fn write_accounts_to_csv(accounts: &HashMap<u16, Account>) -> Result<(), Box<dyn Error>> {
     let mut wtr = csv::Writer::from_writer(io::stdout());
     wtr.write_record(&["client", "available", "held", "total", "locked"])?;
@@ -403,50 +410,17 @@ mod tests {
     use super::*;
     use rust_decimal::Decimal;
     use std::collections::{HashMap, HashSet};
-    use std::io::Cursor;
+    use std::env;
+    use std::fs::File;
+    use std::path::PathBuf;
 
     #[test]
     fn test_large_csv_with_edge_cases() {
-        let csv_data = "\
-type,client,tx,amount
-deposit,1,1,1000.0000
-deposit,2,2,2000.1234
-deposit,1,3,500.0000
-# Invalid Deposit (exceeds precision)
-deposit,3,4,100.12345
-withdrawal,1,5,300.0000
-# Withdrawal with Insufficient Funds
-withdrawal,2,6,3000.0000
-# Duplicate Transaction ID
-deposit,1,1,1000.0000
-dispute,1,3,
-# Dispute on Non-existent Transaction
-dispute,1,99,
-# Dispute on Withdrawal
-dispute,1,5,
-resolve,1,3,
-# Chargeback on Resolved Dispute
-chargeback,1,3,
-dispute,2,2,
-chargeback,2,2,
-# Attempt Transaction on Locked Account
-deposit,2,7,500.0000
-# Invalid Transaction Type
-invalid_type,1,8,100.0000
-# Missing Amount in Deposit
-deposit,4,9,
-# Missing Amount in Withdrawal
-withdrawal,4,10,
-# Negative Amount in Deposit
-deposit,4,11,-100.0000
-# Negative Amount in Withdrawal
-withdrawal,1,12,-200.0000
-# Exceeding Precision in Withdrawal
-withdrawal,1,13,50.12345
-deposit,1,14,100.0000
-";
+        let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+        let mut csv_path = PathBuf::from(manifest_dir);
+        csv_path.push("tests/data/test_data.csv");
 
-        let file = Cursor::new(csv_data);
+        let file = File::open(&csv_path).expect("Failed to open test data CSV file");
         let mut rdr = ReaderBuilder::new().comment(Some(b'#')).from_reader(file);
 
         let mut accounts: HashMap<u16, Account> = HashMap::new();
