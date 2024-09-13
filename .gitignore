@@ -1,4 +1,4 @@
 /target
-*.csv
+output.csv
 notes.md
 custom_tests.rs

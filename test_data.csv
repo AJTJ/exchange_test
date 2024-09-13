@@ -1,0 +1,36 @@
+type,client,tx,amount
+deposit,1,1,1000.0000
+deposit,2,2,2000.1234
+deposit,1,3,500.0000
+# Invalid Deposit (exceeds precision)
+deposit,3,4,100.12345
+withdrawal,1,5,300.0000
+# Withdrawal with Insufficient Funds
+withdrawal,2,6,3000.0000
+# Duplicate Transaction ID
+deposit,1,1,1000.0000
+dispute,1,3,
+# Dispute on Non-existent Transaction
+dispute,1,99,
+# Dispute on Withdrawal
+dispute,1,5,
+resolve,1,3,
+# Chargeback on Resolved Dispute
+chargeback,1,3,
+dispute,2,2,
+chargeback,2,2,
+# Attempt Transaction on Locked Account
+deposit,2,7,500.0000
+# Invalid Transaction Type
+invalid_type,1,8,100.0000
+# Missing Amount in Deposit
+deposit,4,9,
+# Missing Amount in Withdrawal
+withdrawal,4,10,
+# Negative Amount in Deposit
+deposit,4,11,-100.0000
+# Negative Amount in Withdrawal
+withdrawal,1,12,-200.0000
+# Exceeding Precision in Withdrawal
+withdrawal,1,13,50.12345
+deposit,1,14,100.0000

@@ -42,6 +42,7 @@ struct Record {
     amount: Option<Decimal>,
 }
 
+// Account struct to store and manipulate account information
 #[derive(Debug, Clone)]
 struct Account {
     available: Decimal,
@@ -134,7 +135,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let file = File::open(input_file)?;
     let mut rdr = ReaderBuilder::new().comment(Some(b'#')).from_reader(file);
 
-    // For the purposes of this exercise, we'll store accounts, transactions, and disputes in memory
+    // For the purpose of this project we'll use a HashMap to store accounts and transactions
     let mut accounts: HashMap<u16, Account> = HashMap::new();
     let mut transactions: HashMap<u32, Record> = HashMap::new();
     let mut disputes: HashSet<u32> = HashSet::new();
@@ -210,6 +211,7 @@ fn process_transaction(
     }
 }
 
+// Helper functions to process each transaction type
 fn process_deposit(
     record: &Record,
     account: &mut Account,
@@ -395,6 +397,7 @@ fn write_accounts_to_csv(accounts: &HashMap<u16, Account>) -> Result<(), Box<dyn
 fn has_valid_precision(amount: &Decimal) -> bool {
     amount.scale() <= 4 // Scale gives the number of decimal places
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,29 +409,24 @@ mod tests {
     fn test_large_csv_with_edge_cases() {
         let csv_data = "\
 type,client,tx,amount
-# Valid Deposits
 deposit,1,1,1000.0000
 deposit,2,2,2000.1234
 deposit,1,3,500.0000
 # Invalid Deposit (exceeds precision)
 deposit,3,4,100.12345
-# Valid Withdrawal
 withdrawal,1,5,300.0000
 # Withdrawal with Insufficient Funds
 withdrawal,2,6,3000.0000
 # Duplicate Transaction ID
 deposit,1,1,1000.0000
-# Dispute on Valid Deposit
 dispute,1,3,
 # Dispute on Non-existent Transaction
 dispute,1,99,
 # Dispute on Withdrawal
 dispute,1,5,
-# Resolve Valid Dispute
 resolve,1,3,
 # Chargeback on Resolved Dispute
 chargeback,1,3,
-# Chargeback on Valid Dispute
 dispute,2,2,
 chargeback,2,2,
 # Attempt Transaction on Locked Account
@@ -445,7 +443,6 @@ deposit,4,11,-100.0000
 withdrawal,1,12,-200.0000
 # Exceeding Precision in Withdrawal
 withdrawal,1,13,50.12345
-# Valid Deposit After Chargeback
 deposit,1,14,100.0000
 ";
 
@@ -458,7 +455,6 @@ deposit,1,14,100.0000
 
         // Keep track of error count
         let mut error_count = 0;
-
         for result in rdr.deserialize() {
             let record: Record = match result {
                 Ok(rec) => rec,
@@ -470,79 +466,69 @@ deposit,1,14,100.0000
             if process_transaction(&record, &mut accounts, &mut transactions, &mut disputes)
                 .is_err()
             {
-                // Increment error count instead of collecting error messages
                 error_count += 1;
             }
         }
+        assert_eq!(error_count, 13);
 
-        // Verify error count
-        assert_eq!(error_count, 13); // Expected number of errors
-
-        // Verify the final state of the accounts
         let account1 = accounts.get(&1).unwrap();
-        assert_eq!(account1.available, Decimal::new(130000, 2)); // $1300.00
-        assert_eq!(account1.held, Decimal::new(0, 2)); // $0.00
-        assert_eq!(account1.total, Decimal::new(130000, 2)); // $1300.00
-        assert!(!account1.locked); // Account is not locked
+        assert_eq!(account1.available, Decimal::new(130000, 2));
+        assert_eq!(account1.held, Decimal::new(0, 2));
+        assert_eq!(account1.total, Decimal::new(130000, 2));
+        assert!(!account1.locked);
 
         let account2 = accounts.get(&2).unwrap();
-        assert_eq!(account2.available, Decimal::new(0, 4)); // $0.0000
-        assert_eq!(account2.held, Decimal::new(0, 4)); // $0.0000
-        assert_eq!(account2.total, Decimal::new(0, 4)); // $0.0000
-        assert!(account2.locked); // Account is locked after chargeback
+        assert_eq!(account2.available, Decimal::new(0, 4));
+        assert_eq!(account2.held, Decimal::new(0, 4));
+        assert_eq!(account2.total, Decimal::new(0, 4));
+        assert!(account2.locked);
 
-        // Ensure account 3 and account 4 do not exist due to invalid transactions
         assert!(!accounts.contains_key(&3));
         assert!(!accounts.contains_key(&4));
     }
 
-    // Test basic deposit and withdrawal functionality
     #[test]
     fn test_account_deposit_and_withdrawal() {
         let mut account = Account::new();
-        account.deposit(Decimal::new(1000, 2)).unwrap(); // Deposit $10.00
-        account.withdraw(Decimal::new(500, 2)).unwrap(); // Withdraw $5.00
+        account.deposit(Decimal::new(1000, 2)).unwrap();
+        account.withdraw(Decimal::new(500, 2)).unwrap();
 
-        assert_eq!(account.available, Decimal::new(500, 2)); // $5.00
-        assert_eq!(account.total, Decimal::new(500, 2)); // $5.00
-        assert_eq!(account.held, Decimal::new(0, 2)); // $0.00
+        assert_eq!(account.available, Decimal::new(500, 2));
+        assert_eq!(account.total, Decimal::new(500, 2));
+        assert_eq!(account.held, Decimal::new(0, 2));
     }
 
-    // Test dispute and resolve functionality
     #[test]
     fn test_account_dispute_and_resolve() {
         let mut account = Account::new();
-        account.deposit(Decimal::new(1000, 2)).unwrap(); // Deposit $10.00
-        account.apply_dispute(Decimal::new(1000, 2)).unwrap(); // Dispute $10.00
-        account.resolve_dispute(Decimal::new(1000, 2)).unwrap(); // Resolve dispute
+        account.deposit(Decimal::new(1000, 2)).unwrap();
+        account.apply_dispute(Decimal::new(1000, 2)).unwrap();
+        account.resolve_dispute(Decimal::new(1000, 2)).unwrap();
 
-        assert_eq!(account.available, Decimal::new(1000, 2)); // $10.00
-        assert_eq!(account.held, Decimal::new(0, 2)); // $0.00
-        assert_eq!(account.total, Decimal::new(1000, 2)); // $10.00
+        assert_eq!(account.available, Decimal::new(1000, 2));
+        assert_eq!(account.held, Decimal::new(0, 2));
+        assert_eq!(account.total, Decimal::new(1000, 2));
     }
 
-    // Test chargeback functionality
     #[test]
     fn test_account_chargeback() {
         let mut account = Account::new();
-        account.deposit(Decimal::new(1000, 2)).unwrap(); // Deposit $10.00
-        account.apply_dispute(Decimal::new(1000, 2)).unwrap(); // Dispute $10.00
-        account.chargeback(Decimal::new(1000, 2)).unwrap(); // Chargeback
+        account.deposit(Decimal::new(1000, 2)).unwrap();
+        account.apply_dispute(Decimal::new(1000, 2)).unwrap();
+        account.chargeback(Decimal::new(1000, 2)).unwrap();
 
-        assert_eq!(account.available, Decimal::new(0, 2)); // $0.00
-        assert_eq!(account.held, Decimal::new(0, 2)); // $0.00
-        assert_eq!(account.total, Decimal::new(0, 2)); // $0.00
-        assert!(account.locked); // Account should be locked
+        assert_eq!(account.available, Decimal::new(0, 2));
+        assert_eq!(account.held, Decimal::new(0, 2));
+        assert_eq!(account.total, Decimal::new(0, 2));
+        assert!(account.locked);
     }
 
-    // Test processing a deposit and withdrawal transaction
     #[test]
     fn test_process_transaction_deposit_withdrawal() {
         let mut accounts = HashMap::new();
         let mut transactions = HashMap::new();
         let mut disputes = HashSet::new();
 
-        // Deposit $10.00
         let deposit_record = Record {
             tx_type: "deposit".to_string(),
             client: 1,
@@ -557,7 +543,6 @@ deposit,1,14,100.0000
         )
         .unwrap();
 
-        // Withdraw $5.00
         let withdrawal_record = Record {
             tx_type: "withdrawal".to_string(),
             client: 1,
@@ -573,19 +558,17 @@ deposit,1,14,100.0000
         .unwrap();
 
         let account = accounts.get(&1).unwrap();
-        assert_eq!(account.available, Decimal::new(500, 2)); // $5.00
-        assert_eq!(account.total, Decimal::new(500, 2)); // $5.00
-        assert_eq!(account.held, Decimal::new(0, 2)); // $0.00
+        assert_eq!(account.available, Decimal::new(500, 2));
+        assert_eq!(account.total, Decimal::new(500, 2));
+        assert_eq!(account.held, Decimal::new(0, 2));
     }
 
-    // Test processing dispute and resolve transactions
     #[test]
     fn test_process_dispute_and_resolve() {
         let mut accounts = HashMap::new();
         let mut transactions = HashMap::new();
         let mut disputes = HashSet::new();
 
-        // Deposit $10.00
         let deposit_record = Record {
             tx_type: "deposit".to_string(),
             client: 1,
@@ -600,7 +583,6 @@ deposit,1,14,100.0000
         )
         .unwrap();
 
-        // Dispute transaction
         let dispute_record = Record {
             tx_type: "dispute".to_string(),
             client: 1,
@@ -615,7 +597,6 @@ deposit,1,14,100.0000
         )
         .unwrap();
 
-        // Resolve dispute
         let resolve_record = Record {
             tx_type: "resolve".to_string(),
             client: 1,
@@ -631,19 +612,17 @@ deposit,1,14,100.0000
         .unwrap();
 
         let account = accounts.get(&1).unwrap();
-        assert_eq!(account.available, Decimal::new(1000, 2)); // $10.00
-        assert_eq!(account.held, Decimal::new(0, 2)); // $0.00
-        assert_eq!(account.total, Decimal::new(1000, 2)); // $10.00
+        assert_eq!(account.available, Decimal::new(1000, 2));
+        assert_eq!(account.held, Decimal::new(0, 2));
+        assert_eq!(account.total, Decimal::new(1000, 2));
     }
 
-    // Test processing a chargeback transaction
     #[test]
     fn test_process_chargeback() {
         let mut accounts = HashMap::new();
         let mut transactions = HashMap::new();
         let mut disputes = HashSet::new();
 
-        // Deposit $10.00
         let deposit_record = Record {
             tx_type: "deposit".to_string(),
             client: 1,
@@ -658,7 +637,6 @@ deposit,1,14,100.0000
         )
         .unwrap();
 
-        // Dispute transaction
         let dispute_record = Record {
             tx_type: "dispute".to_string(),
             client: 1,
@@ -673,7 +651,6 @@ deposit,1,14,100.0000
         )
         .unwrap();
 
-        // Chargeback transaction
         let chargeback_record = Record {
             tx_type: "chargeback".to_string(),
             client: 1,
@@ -689,20 +666,18 @@ deposit,1,14,100.0000
         .unwrap();
 
         let account = accounts.get(&1).unwrap();
-        assert_eq!(account.available, Decimal::new(0, 2)); // $0.00
-        assert_eq!(account.held, Decimal::new(0, 2)); // $0.00
-        assert_eq!(account.total, Decimal::new(0, 2)); // $0.00
-        assert!(account.locked); // Account should be locked
+        assert_eq!(account.available, Decimal::new(0, 2));
+        assert_eq!(account.held, Decimal::new(0, 2));
+        assert_eq!(account.total, Decimal::new(0, 2));
+        assert!(account.locked);
     }
 
-    // Test handling duplicate transaction IDs
     #[test]
     fn test_duplicate_transaction_id() {
         let mut accounts = HashMap::new();
         let mut transactions = HashMap::new();
         let mut disputes = HashSet::new();
 
-        // First deposit transaction
         let deposit_record1 = Record {
             tx_type: "deposit".to_string(),
             client: 1,
@@ -717,7 +692,6 @@ deposit,1,14,100.0000
         )
         .unwrap();
 
-        // Duplicate deposit transaction with same ID
         let deposit_record2 = Record {
             tx_type: "deposit".to_string(),
             client: 1,
@@ -733,19 +707,17 @@ deposit,1,14,100.0000
         assert!(result.is_err());
 
         let account = accounts.get(&1).unwrap();
-        // Ensure the account balance hasn't changed
-        assert_eq!(account.available, Decimal::new(1000, 2)); // $10.00
-        assert_eq!(account.total, Decimal::new(1000, 2)); // $10.00
+
+        assert_eq!(account.available, Decimal::new(1000, 2));
+        assert_eq!(account.total, Decimal::new(1000, 2));
     }
 
-    // Test handling insufficient funds during withdrawal
     #[test]
     fn test_withdrawal_insufficient_funds() {
         let mut accounts = HashMap::new();
         let mut transactions = HashMap::new();
         let mut disputes = HashSet::new();
 
-        // Deposit $5.00
         let deposit_record = Record {
             tx_type: "deposit".to_string(),
             client: 1,
@@ -760,7 +732,6 @@ deposit,1,14,100.0000
         )
         .unwrap();
 
-        // Attempt to withdraw $10.00
         let withdrawal_record = Record {
             tx_type: "withdrawal".to_string(),
             client: 1,
@@ -776,24 +747,21 @@ deposit,1,14,100.0000
         assert!(result.is_err());
 
         let account = accounts.get(&1).unwrap();
-        // Ensure the account balance hasn't changed
-        assert_eq!(account.available, Decimal::new(500, 2)); // $5.00
-        assert_eq!(account.total, Decimal::new(500, 2)); // $5.00
+
+        assert_eq!(account.available, Decimal::new(500, 2));
+        assert_eq!(account.total, Decimal::new(500, 2));
     }
 
-    // Test attempting a transaction on a locked account
     #[test]
     fn test_transaction_on_locked_account() {
         let mut accounts = HashMap::new();
         let mut transactions = HashMap::new();
         let mut disputes = HashSet::new();
 
-        // Create and lock the account
         let mut account = Account::new();
         account.locked = true;
         accounts.insert(1, account);
 
-        // Attempt to deposit into a locked account
         let deposit_record = Record {
             tx_type: "deposit".to_string(),
             client: 1,
@@ -809,8 +777,8 @@ deposit,1,14,100.0000
         assert!(result.is_err());
 
         let account = accounts.get(&1).unwrap();
-        // Ensure the account balance hasn't changed
-        assert_eq!(account.available, Decimal::new(0, 2)); // $0.00
-        assert_eq!(account.total, Decimal::new(0, 2)); // $0.00
+
+        assert_eq!(account.available, Decimal::new(0, 2));
+        assert_eq!(account.total, Decimal::new(0, 2));
     }
 }
