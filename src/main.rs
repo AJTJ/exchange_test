@@ -170,6 +170,7 @@ fn process_transaction(
     let tx_type = TxType::from_str(&record.tx_type)?;
 
     match tx_type {
+        // Access or create an account for deposits
         TxType::Deposit => {
             let mut account = accounts
                 .get(&record.client)
@@ -183,20 +184,12 @@ fn process_transaction(
 
             Ok(())
         }
-        TxType::Withdrawal => {
-            if let Some(account) = accounts.get_mut(&record.client) {
-                process_withdrawal(&record, account, transactions)
-            } else {
-                Err(format!(
-                    "Account {} does not exist for transaction type {:?}",
-                    record.client, tx_type
-                )
-                .into())
-            }
-        }
-        TxType::Dispute | TxType::Resolve | TxType::Chargeback => {
+
+        // All other transaction types require an existing account
+        TxType::Withdrawal | TxType::Dispute | TxType::Resolve | TxType::Chargeback => {
             if let Some(account) = accounts.get_mut(&record.client) {
                 match tx_type {
+                    TxType::Withdrawal => process_withdrawal(&record, account, transactions),
                     TxType::Dispute => process_dispute(&record, account, transactions, disputes),
                     TxType::Resolve => process_resolve(&record, account, transactions, disputes),
                     TxType::Chargeback => {
@@ -232,6 +225,8 @@ fn process_deposit(
             )
             .into());
         }
+
+        // Reject deposits that exceed the precision
         if !has_valid_precision(&amount) {
             return Err(format!(
                 "Deposit amount exceeds allowed precision; transaction {}",
@@ -266,6 +261,7 @@ fn process_withdrawal(
             .into());
         }
 
+        // Reject withdrawals that exceed the precision
         if !has_valid_precision(&amount) {
             return Err(format!(
                 "Withdrawal amount exceeds allowed precision; transaction {}",
