@@ -13,3 +13,5 @@
 - My code streams the CSV file one line at a time, rather than loading the whole CSV file into memory. For demo purposes, this handles very large CSV files, but at scale I'd continue with the idea of partitioning by `client_id` in order to have multiple services (horizontal scaling) processing different partitions concurrently. Avoiding conflicts and maintaining transaction ordering for each client would be a priority.
 
 - Regarding security, I've put a bit of care into ensuring proper precision and rejecting transactions that exceed it. In a real world scenario, overflow and underflow would likely need further scrutiny.
+
+I look forward to hearing from you. 🦀
