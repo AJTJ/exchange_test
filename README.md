@@ -1,6 +1,6 @@
 ## Some notes on this project.
 
-- I've tested this with test CSV files, as well as wrote/generated various unit tests to suss out edge cases such as: duplicate transactions, invalid disputes/chargebacks, insufficient funds for withdrawals, precision errors etc... It's quite an interesting technical exam, as there are numerous "gotchas".
+- I've tested this with some unit tests and a CSV file of edge cases such as: duplicate transactions, invalid disputes/chargebacks, insufficient funds for withdrawals, precision errors etc... It's quite an interesting technical exam, as there are numerous "gotchas". In production, I'd want a lot more unit tests and edge case exploration.
 
 - The separation of concerns between account manipulation and transaction validation/management was a design choice. In my mind it is idiomatic to rustic systems to maintain a more functional structure. And I find that modularity helps with maintainability and feature enhancements.
 
